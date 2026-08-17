@@ -61,12 +61,12 @@ flutter run --target lib/main_development.dart
 
 ```bash
 # Terminal 1 — รัน Server
-cd compass_app/server
+cd compass_app/compass_app/server
 dart run
 # Server จะรันที่ http://localhost:8080
 
 # Terminal 2 — รัน Flutter App
-cd compass_app/app
+cd compass_app/compass_app/app
 flutter run --target lib/main_staging.dart
 ```
 
