@@ -53,7 +53,7 @@ cd compass_app
 **โหมด Development** (ใช้ข้อมูลจาก JSON ไฟล์ ไม่ต้องรัน Server):
 
 ```bash
-cd compass_app/app
+cd compass_app/compass_app/app
 flutter run --target lib/main_development.dart
 ```
 
