@@ -41,11 +41,16 @@ class Command(BaseCommand):
         client.name = "Flutter Frontend2"
         client.client_id = client_id
         client.client_secret = "flutter-frontend2-secret"
-        client.response_types.set(ResponseType.objects.filter(value="code"))
-        client.redirect_uris = ["com.example.frontend2://callback"]
+        client.redirect_uris = [
+            "com.example.frontend2://callback",  # Android/iOS
+            "http://localhost:4200",              # Flutter Web (run with --web-port 4200)
+        ]
         client.scope = ["openid", "email", "profile"]
         client.client_type = "public"
-        client.save()
+        client.save()  # ต้อง save ก่อน เพื่อให้มี id ก่อนจะ set ManyToMany
+        response_type = ResponseType.objects.filter(value="code").first()
+        if response_type:
+            client.response_types.add(response_type)
 
         self.stdout.write(self.style.SUCCESS(
             f"\nOIDC Client created:\n"

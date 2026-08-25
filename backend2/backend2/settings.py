@@ -22,11 +22,13 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "oidc_provider",
+    "corsheaders",
     "oidc_setup",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -86,3 +88,15 @@ OIDC_EXTRA_SCOPE_CLAIMS = "oidc_setup.oidc_provider_settings.CustomScopeClaims"
 # OIDC issuer URL — must match server address
 SITE_URL = "http://localhost:8001"
 OIDC_ISSUER = SITE_URL
+
+# ─── CORS ────────────────────────────────────────────────────────────────────
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "origin",
+    "user-agent",
+]
+CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]

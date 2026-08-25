@@ -95,8 +95,8 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  // Change to your backend1 IP/hostname when testing on a real device
-  static const String _baseUrl = 'http://10.0.2.2:8000';
+  // localhost:8000 สำหรับ Chrome/Web, เปลี่ยนเป็น 10.0.2.2:8000 สำหรับ Android Emulator
+  static const String _baseUrl = 'http://localhost:8000';
 
   final _formKey = GlobalKey<FormState>();
   final _usernameCtrl = TextEditingController(text: 'admin');

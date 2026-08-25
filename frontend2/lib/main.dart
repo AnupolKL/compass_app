@@ -1,11 +1,39 @@
+import 'dart:convert';
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'package:flutter/material.dart';
-import 'package:flutter_appauth/flutter_appauth.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const Frontend2App());
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// OIDC Configuration — ชี้ไปที่ backend2
+// ─────────────────────────────────────────────────────────────────────────────
+class OidcConfig {
+  static const String issuer = 'http://localhost:8001';
+  static const String clientId = 'flutter-frontend2';
+  static const String clientSecret = 'flutter-frontend2-secret';
+  // Fixed port 4200 — run: flutter run -d chrome --web-port 4200
+  static const String redirectUri = 'http://localhost:4200';
+  static const List<String> scopes = ['openid', 'email', 'profile'];
+
+  static String buildAuthorizationUrl() {
+    final params = {
+      'client_id': clientId,
+      'response_type': 'code',
+      'scope': scopes.join(' '),
+      'redirect_uri': redirectUri,
+    };
+    return '$issuer/openid/authorize?${Uri(queryParameters: params).query}';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// App
+// ─────────────────────────────────────────────────────────────────────────────
 class Frontend2App extends StatelessWidget {
   const Frontend2App({super.key});
 
@@ -20,84 +48,99 @@ class Frontend2App extends StatelessWidget {
           brightness: Brightness.light,
         ),
         useMaterial3: true,
-        inputDecorationTheme: const InputDecorationTheme(
-          border: OutlineInputBorder(),
-          filled: true,
-        ),
       ),
-      home: const AuthGate(),
+      home: const OidcCallbackHandler(),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// OIDC Configuration
+// OIDC Callback Handler — ตรวจสอบ URL ว่ามี ?code= กลับมาหรือไม่
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// OIDC server settings — pointing to backend2
-class OidcConfig {
-  // Change to your backend2 address when testing on a physical device
-  static const String issuer = 'http://10.0.2.2:8001';
-  static const String clientId = 'flutter-frontend2';
-  static const String clientSecret = 'flutter-frontend2-secret';
-  static const String redirectUri = 'com.example.frontend2://callback';
-  static const List<String> scopes = ['openid', 'email', 'profile'];
-
-  static const String discoveryUrl =
-      '$issuer/openid/.well-known/openid-configuration';
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// AUTH GATE
-// ─────────────────────────────────────────────────────────────────────────────
-
-class AuthGate extends StatefulWidget {
-  const AuthGate({super.key});
+class OidcCallbackHandler extends StatefulWidget {
+  const OidcCallbackHandler({super.key});
 
   @override
-  State<AuthGate> createState() => _AuthGateState();
+  State<OidcCallbackHandler> createState() => _OidcCallbackHandlerState();
 }
 
-class _AuthGateState extends State<AuthGate> {
+class _OidcCallbackHandlerState extends State<OidcCallbackHandler> {
   bool _loading = true;
   String? _idToken;
   String? _accessToken;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _loadSession();
+    _handleStartup();
   }
 
-  Future<void> _loadSession() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _idToken = prefs.getString('id_token');
-      _accessToken = prefs.getString('access_token');
-      _loading = false;
-    });
-  }
+  Future<void> _handleStartup() async {
+    // ตรวจสอบว่า URL มี ?code= (callback จาก backend2) หรือไม่
+    final uri = Uri.parse(html.window.location.href);
+    final code = uri.queryParameters['code'];
 
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    if (code != null && code.isNotEmpty) {
+      // ล้าง code ออกจาก URL
+      html.window.history.replaceState(null, '', OidcConfig.redirectUri);
+      await _exchangeCode(code);
+    } else {
+      // ตรวจสอบว่า login ไว้แล้วหรือยัง
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getString('id_token');
+      setState(() {
+        _idToken = saved;
+        _accessToken = prefs.getString('access_token');
+        _loading = false;
+      });
     }
-    if (_idToken != null) {
-      return OidcHomePage(
-        idToken: _idToken!,
-        accessToken: _accessToken ?? '',
-        onLogout: _logout,
-      );
-    }
-    return OidcLoginPage(onLoginSuccess: _onLoginSuccess);
   }
 
-  void _onLoginSuccess(String idToken, String accessToken) {
-    setState(() {
-      _idToken = idToken;
-      _accessToken = accessToken;
-    });
+  Future<void> _exchangeCode(String code) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${OidcConfig.issuer}/openid/token'),
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: {
+              'grant_type': 'authorization_code',
+              'code': code,
+              'redirect_uri': OidcConfig.redirectUri,
+              'client_id': OidcConfig.clientId,
+              'client_secret': OidcConfig.clientSecret,
+            },
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final idToken = (data['id_token'] as String?) ?? '';
+        final accessToken = (data['access_token'] as String?) ?? '';
+        final refreshToken = (data['refresh_token'] as String?) ?? '';
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('id_token', idToken);
+        await prefs.setString('access_token', accessToken);
+        await prefs.setString('refresh_token', refreshToken);
+
+        setState(() {
+          _idToken = idToken;
+          _accessToken = accessToken;
+          _loading = false;
+        });
+      } else {
+        setState(() {
+          _error = 'Token exchange failed (${response.statusCode}):\n${response.body}';
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _error = 'Error exchanging code: $e\n\nMake sure backend2 is running at ${OidcConfig.issuer}';
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _logout() async {
@@ -108,70 +151,38 @@ class _AuthGateState extends State<AuthGate> {
     setState(() {
       _idToken = null;
       _accessToken = null;
+      _error = null;
     });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_idToken != null && _idToken!.isNotEmpty) {
+      return OidcHomePage(
+        idToken: _idToken!,
+        accessToken: _accessToken ?? '',
+        onLogout: _logout,
+      );
+    }
+    return OidcLoginPage(error: _error);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LOGIN PAGE
 // ─────────────────────────────────────────────────────────────────────────────
+class OidcLoginPage extends StatelessWidget {
+  final String? error;
+  const OidcLoginPage({super.key, this.error});
 
-class OidcLoginPage extends StatefulWidget {
-  final void Function(String idToken, String accessToken) onLoginSuccess;
-  const OidcLoginPage({super.key, required this.onLoginSuccess});
-
-  @override
-  State<OidcLoginPage> createState() => _OidcLoginPageState();
-}
-
-class _OidcLoginPageState extends State<OidcLoginPage> {
-  final FlutterAppAuth _appAuth = const FlutterAppAuth();
-  bool _loading = false;
-  String? _errorMessage;
-
-  Future<void> _loginWithOidc() async {
-    setState(() {
-      _loading = true;
-      _errorMessage = null;
-    });
-
-    try {
-      final result = await _appAuth.authorizeAndExchangeCode(
-        AuthorizationTokenRequest(
-          OidcConfig.clientId,
-          OidcConfig.redirectUri,
-          clientSecret: OidcConfig.clientSecret,
-          serviceConfiguration: AuthorizationServiceConfiguration(
-            authorizationEndpoint: '${OidcConfig.issuer}/openid/authorize',
-            tokenEndpoint: '${OidcConfig.issuer}/openid/token',
-          ),
-          scopes: OidcConfig.scopes,
-        ),
-      );
-
-      if (result != null) {
-        final idToken = result.idToken ?? '';
-        final accessToken = result.accessToken ?? '';
-        final refreshToken = result.refreshToken ?? '';
-
-        // Persist session
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('id_token', idToken);
-        await prefs.setString('access_token', accessToken);
-        await prefs.setString('refresh_token', refreshToken);
-
-        widget.onLoginSuccess(idToken, accessToken);
-      } else {
-        setState(() => _errorMessage = 'Authorization cancelled or failed.');
-      }
-    } catch (e) {
-      setState(() {
-        _errorMessage =
-            'OIDC Error: ${e.toString()}\n\nMake sure backend2 is running at ${OidcConfig.issuer}';
-      });
-    } finally {
-      setState(() => _loading = false);
-    }
+  void _startOidcLogin() {
+    // Redirect browser ไปยัง backend2 authorization endpoint
+    html.window.location.assign(OidcConfig.buildAuthorizationUrl());
   }
 
   @override
@@ -185,14 +196,14 @@ class _OidcLoginPageState extends State<OidcLoginPage> {
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
             child: Card(
               elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
               child: Padding(
                 padding: const EdgeInsets.all(28),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Header
                     Icon(Icons.security_rounded,
                         size: 64, color: theme.colorScheme.primary),
                     const SizedBox(height: 12),
@@ -211,7 +222,7 @@ class _OidcLoginPageState extends State<OidcLoginPage> {
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 24),
 
                     // Info card
                     Container(
@@ -225,51 +236,39 @@ class _OidcLoginPageState extends State<OidcLoginPage> {
                         children: [
                           Text('OIDC Server (backend2)',
                               style: theme.textTheme.labelMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              )),
+                                  fontWeight: FontWeight.bold)),
                           const SizedBox(height: 4),
                           Text(OidcConfig.issuer,
                               style: const TextStyle(
                                   fontFamily: 'monospace', fontSize: 12)),
-                          const SizedBox(height: 4),
                           Text('Client ID: ${OidcConfig.clientId}',
+                              style: const TextStyle(fontSize: 12)),
+                          Text('Redirect URI: ${OidcConfig.redirectUri}',
                               style: const TextStyle(fontSize: 12)),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 16),
 
-                    // Error message
-                    if (_errorMessage != null) ...[
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: theme.colorScheme.errorContainer,
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Text(
-                          _errorMessage!,
-                          style: TextStyle(
-                              color: theme.colorScheme.onErrorContainer,
-                              fontSize: 12),
-                        ),
+                        child: Text(error!,
+                            style: TextStyle(
+                                color: theme.colorScheme.onErrorContainer,
+                                fontSize: 12)),
                       ),
-                      const SizedBox(height: 12),
                     ],
+                    const SizedBox(height: 20),
 
-                    // Login button
                     FilledButton.icon(
-                      onPressed: _loading ? null : _loginWithOidc,
-                      icon: _loading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Icon(Icons.open_in_browser),
-                      label: Text(
-                          _loading ? 'Opening browser...' : 'Login with OIDC'),
+                      onPressed: _startOidcLogin,
+                      icon: const Icon(Icons.open_in_browser),
+                      label: const Text('Login with OIDC'),
                       style: FilledButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         textStyle: const TextStyle(fontSize: 16),
@@ -277,12 +276,11 @@ class _OidcLoginPageState extends State<OidcLoginPage> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'คลิก Login เพื่อเปิดหน้า login ของ backend2\n'
-                      'กรอก username: admin / password: admin123',
+                      'คลิก Login เพื่อไปหน้า login ของ backend2\n'
+                      'กรอก admin / admin123',
                       textAlign: TextAlign.center,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.outline,
-                      ),
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: theme.colorScheme.outline),
                     ),
                   ],
                 ),
@@ -296,9 +294,8 @@ class _OidcLoginPageState extends State<OidcLoginPage> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HOME PAGE (after OIDC login)
+// HOME PAGE (หลัง OIDC login สำเร็จ)
 // ─────────────────────────────────────────────────────────────────────────────
-
 class OidcHomePage extends StatelessWidget {
   final String idToken;
   final String accessToken;
@@ -311,8 +308,8 @@ class OidcHomePage extends StatelessWidget {
     required this.onLogout,
   });
 
-  String _preview(String token) =>
-      token.length > 40 ? '${token.substring(0, 40)}...' : token;
+  String _preview(String t) =>
+      t.length > 50 ? '${t.substring(0, 50)}...' : t;
 
   @override
   Widget build(BuildContext context) {
@@ -340,17 +337,14 @@ class OidcHomePage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Icon(Icons.verified_user,
-                            color: theme.colorScheme.primary),
-                        const SizedBox(width: 8),
-                        Text('OIDC Login Successful',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            )),
-                      ],
-                    ),
+                    Row(children: [
+                      Icon(Icons.verified_user,
+                          color: theme.colorScheme.primary),
+                      const SizedBox(width: 8),
+                      Text('OIDC Login Successful!',
+                          style: theme.textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.bold)),
+                    ]),
                     const SizedBox(height: 16),
                     _tokenRow(context, 'ID Token', idToken),
                     const SizedBox(height: 12),
@@ -389,10 +383,8 @@ class OidcHomePage extends StatelessWidget {
             color: theme.colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(8),
           ),
-          child: Text(
-            _preview(token),
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-          ),
+          child: Text(_preview(token),
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 11)),
         ),
       ],
     );
